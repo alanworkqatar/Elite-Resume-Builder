@@ -1,0 +1,8 @@
+{
+  "name": "Executive Resume Builder & AI Parser",
+  "description": "Executive resume builder with AI Job Application Copilot: semantic job matching, tailored resumes, anti-hallucination claim verification, and customized cover letters.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
