@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Registered candidate user profile record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Unique auth UID" },
+        "fullName": { "type": "string", "description": "Candidate full name" },
+        "email": { "type": "string", "description": "Candidate primary email address" },
+        "headline": { "type": "string", "description": "Professional headline or target title" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last updated timestamp" }
+      },
+      "required": ["userId", "fullName", "email", "createdAt", "updatedAt"]
+    },
+    "MasterResume": {
+      "title": "MasterResume",
+      "description": "Comprehensive Master Professional Profile and photo data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Resume document identifier" },
+        "ownerId": { "type": "string", "description": "UID of the owner candidate" },
+        "personal": {
+          "type": "object",
+          "description": "Candidate contact, photo, and biographical details"
+        },
+        "summary": { "type": "string", "description": "Executive summary paragraph" },
+        "experience": { "type": "array", "description": "List of work experiences" },
+        "education": { "type": "array", "description": "List of academic qualifications" },
+        "skills": { "type": "array", "description": "Core competencies and skills" },
+        "awards": { "type": "array", "description": "Certifications and honors" },
+        "updatedAt": { "type": "string", "description": "Timestamp of last edit" },
+        "createdAt": { "type": "string", "description": "Timestamp of creation" }
+      },
+      "required": ["id", "ownerId", "personal", "experience", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Candidate account profiles"
+    },
+    "/users/{userId}/resumes/{resumeId}": {
+      "schema": "MasterResume",
+      "description": "Candidate master resumes and career history"
+    }
+  }
+}

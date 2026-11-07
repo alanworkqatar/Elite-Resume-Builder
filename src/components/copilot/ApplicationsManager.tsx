@@ -168,9 +168,7 @@ export function ApplicationsManager({
                     type="button"
                     title="Delete application"
                     onClick={() => {
-                      if (window.confirm(`Delete application for ${app.companyName}?`)) {
-                        onDeleteApplication(app.id);
-                      }
+                      onDeleteApplication(app.id);
                     }}
                     className="p-1.5 rounded-lg bg-slate-900 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
                   >

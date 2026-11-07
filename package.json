@@ -18,6 +18,7 @@
     "docx": "^9.13.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "firebase": "^13.2.0",
     "html-to-image": "^1.11.13",
     "html2pdf.js": "^0.14.0",
     "jspdf": "^4.2.1",

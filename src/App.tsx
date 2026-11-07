@@ -14,6 +14,12 @@ import { downloadResumeAsPdf } from './utils/pdfGenerator';
 import { downloadResumeAsDoc, downloadResumeAsDocx } from './utils/docGenerator';
 import { normalizeResumeData } from './utils/normalizeResume';
 import { RESUME_TEMPLATES } from './data/templates';
+import { AuthScreen } from './components/AuthScreen';
+import { UserAccount } from './types/auth';
+import {
+  saveMasterResumeToCloud,
+  loadMasterResumeFromCloud,
+} from './firebase/resumeRepository';
 import {
   Sparkles,
   CheckCircle2,
@@ -26,10 +32,24 @@ import {
 
 const STORAGE_DATA_KEY = 'executive_resume_data_v3';
 const STORAGE_STATUS_KEY = 'executive_resume_has_uploaded_v3';
+const PERSISTENT_APPLICATIONS_KEY = 'copilot_saved_applications_v2';
 const SESSION_APPLICATIONS_KEY = 'copilot_session_applications_v1';
 
 export default function App() {
-  // 1. MASTER PROFESSIONAL PROFILE (Source of Truth - Starts empty until user uploads resume or explicitly loads synthetic demo)
+  // 0. AUTHENTICATION & CANDIDATE ACCOUNT (Mandatory Name and Email to enter workspace)
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
+    try {
+      const savedUser = localStorage.getItem('elite_auth_user_v1') || sessionStorage.getItem('elite_auth_user_v1');
+      if (savedUser) {
+        return JSON.parse(savedUser);
+      }
+    } catch (e) {
+      console.warn('Failed to parse saved user:', e);
+    }
+    return null;
+  });
+
+  // 1. MASTER PROFESSIONAL PROFILE (Faithfully maintained from previous session uploads)
   const [masterResume, setMasterResume] = useState<ResumeData>(() => {
     try {
       localStorage.removeItem('executive_resume_data_v1');
@@ -41,18 +61,31 @@ export default function App() {
     }
 
     try {
-      const hasUploaded = localStorage.getItem(STORAGE_STATUS_KEY) === 'true';
-      const saved = localStorage.getItem(STORAGE_DATA_KEY);
-      if (hasUploaded && saved) {
-        // Auto-purge any stale data containing legacy persona references
-        const lower = saved.toLowerCase();
-        if (lower.includes('pinto') || lower.includes('field industrial') || lower.includes('shemaroo')) {
-          localStorage.removeItem(STORAGE_DATA_KEY);
-          localStorage.removeItem(STORAGE_STATUS_KEY);
-          return normalizeResumeData(emptyResume);
+      // Check user-specific storage first
+      const savedUserStr = localStorage.getItem('elite_auth_user_v1') || sessionStorage.getItem('elite_auth_user_v1');
+      let userSaved: string | null = null;
+      let userKey: string | null = null;
+      if (savedUserStr) {
+        try {
+          const userObj = JSON.parse(savedUserStr);
+          if (userObj?.email) {
+            userKey = `executive_resume_user_${userObj.email.toLowerCase().trim()}`;
+            userSaved = localStorage.getItem(userKey);
+          }
+        } catch {
+          // ignore
         }
+      }
+
+      // Fallback to global uploaded resume storage
+      const globalSaved = localStorage.getItem(STORAGE_DATA_KEY);
+      const saved = userSaved || globalSaved;
+
+      if (saved) {
         const parsed = JSON.parse(saved);
-        return normalizeResumeData(parsed);
+        if (parsed && (parsed.personal?.fullName?.trim() || (parsed.experience && parsed.experience.length > 0) || parsed.summary?.trim())) {
+          return normalizeResumeData(parsed);
+        }
       }
     } catch (e) {
       console.warn('Failed to parse saved resume from localStorage:', e);
@@ -60,16 +93,16 @@ export default function App() {
     return normalizeResumeData(emptyResume);
   });
 
-  // 2. SAVED SESSION JOB APPLICATIONS (Independent records stored in browser session memory)
+  // 2. SAVED JOB APPLICATIONS (Maintained across browser sessions in localStorage)
   const [applications, setApplications] = useState<JobApplicationRecord[]>(() => {
     try {
-      const savedApps = sessionStorage.getItem(SESSION_APPLICATIONS_KEY);
+      const savedApps = localStorage.getItem(PERSISTENT_APPLICATIONS_KEY) || sessionStorage.getItem(SESSION_APPLICATIONS_KEY);
       if (savedApps) {
         const parsed = JSON.parse(savedApps);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch (e) {
-      console.warn('Failed to load session applications:', e);
+      console.warn('Failed to load saved applications:', e);
     }
     return [];
   });
@@ -88,30 +121,45 @@ export default function App() {
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [mobileTab, setMobileTab] = useState<'editor' | 'preview'>('editor');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'saving' | 'offline'>('synced');
 
-  // Auto-save master profile
+  // Auto-save master profile across browser sessions & Firestore Cloud Database
   useEffect(() => {
     const hasContent = Boolean(
       masterResume.personal?.fullName?.trim() ||
-      masterResume.experience?.length > 0 ||
+      (masterResume.experience && masterResume.experience.length > 0) ||
       masterResume.summary?.trim()
     );
+    if (!hasContent) return;
+
     try {
-      if (hasContent) {
-        localStorage.setItem(STORAGE_STATUS_KEY, 'true');
-        localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(masterResume));
+      localStorage.setItem(STORAGE_STATUS_KEY, 'true');
+      localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(masterResume));
+      if (currentUser?.email) {
+        localStorage.setItem(`executive_resume_user_${currentUser.email.toLowerCase().trim()}`, JSON.stringify(masterResume));
       }
     } catch (e) {
       console.error('Failed to save resume data to localStorage:', e);
     }
-  }, [masterResume]);
 
-  // Auto-save session applications to sessionStorage (Privacy-first: no backend cloud storage)
+    // Debounced cloud save to Firestore database
+    if (currentUser?.id) {
+      const timer = setTimeout(async () => {
+        setCloudSyncStatus('saving');
+        const res = await saveMasterResumeToCloud(currentUser.id, masterResume);
+        setCloudSyncStatus(res.success ? 'synced' : 'offline');
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [masterResume, currentUser]);
+
+  // Auto-save session applications to persistent localStorage
   useEffect(() => {
     try {
+      localStorage.setItem(PERSISTENT_APPLICATIONS_KEY, JSON.stringify(applications));
       sessionStorage.setItem(SESSION_APPLICATIONS_KEY, JSON.stringify(applications));
     } catch (e) {
-      console.error('Failed to save session applications:', e);
+      console.error('Failed to save persistent applications:', e);
     }
   }, [applications]);
 
@@ -120,6 +168,109 @@ export default function App() {
     setTimeout(() => {
       setToastMessage(null);
     }, 3500);
+  };
+
+  const handleManualCloudSave = async () => {
+    if (!currentUser?.id) {
+      showToast('Please sign in to save to Cloud Database.');
+      return;
+    }
+    setCloudSyncStatus('saving');
+    showToast('Saving Master Resume & Photo to Firestore Cloud Database...');
+    const res = await saveMasterResumeToCloud(currentUser.id, masterResume);
+    setCloudSyncStatus(res.success ? 'synced' : 'offline');
+    if (res.success) {
+      showToast('Master Resume & Photo saved to Cloud Database!');
+    } else {
+      showToast(res.error || 'Saved safely to local storage.');
+    }
+  };
+
+  const handleLoginSuccess = async (user: UserAccount) => {
+    setCurrentUser(user);
+    setCloudSyncStatus('saving');
+
+    // 1. Try loading directly from Firestore Cloud Database
+    try {
+      const cloudResume = await loadMasterResumeFromCloud(user.id);
+      if (cloudResume && (cloudResume.personal?.fullName?.trim() || cloudResume.experience?.length > 0 || cloudResume.summary?.trim())) {
+        setMasterResume(cloudResume);
+        setCloudSyncStatus('synced');
+        showToast(`Welcome back, ${user.fullName}! Restored Master Resume & Photo from Cloud Database.`);
+        return;
+      }
+    } catch (cloudErr) {
+      console.warn('[Cloud Database] Could not load from cloud:', cloudErr);
+    }
+
+    // 2. Fallback to localStorage from previous session
+    const userKey = `executive_resume_user_${user.email.toLowerCase().trim()}`;
+    const userSaved = localStorage.getItem(userKey);
+    const globalSaved = localStorage.getItem(STORAGE_DATA_KEY);
+    const saved = userSaved || globalSaved;
+
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && (parsed.personal?.fullName?.trim() || (parsed.experience && parsed.experience.length > 0) || parsed.summary?.trim())) {
+          const normalized = normalizeResumeData(parsed);
+          setMasterResume(normalized);
+          // Sync to ensure both userKey and global key are current
+          try {
+            localStorage.setItem(userKey, JSON.stringify(normalized));
+            localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(normalized));
+            localStorage.setItem(STORAGE_STATUS_KEY, 'true');
+          } catch {}
+          // Push to cloud database asynchronously
+          saveMasterResumeToCloud(user.id, normalized)
+            .then((res) => setCloudSyncStatus(res.success ? 'synced' : 'offline'))
+            .catch(() => setCloudSyncStatus('offline'));
+
+          showToast(`Welcome back, ${user.fullName}! Restored your resume from previous session.`);
+          return;
+        }
+      } catch (e) {
+        console.warn('Failed to parse previous session resume:', e);
+      }
+    }
+
+    setCloudSyncStatus('synced');
+    // 3. If no previous upload, initialize blank resume with their verified account details
+    setMasterResume({
+      ...normalizeResumeData(emptyResume),
+      personal: {
+        ...emptyResume.personal,
+        fullName: user.fullName,
+        email: user.email,
+        headline: user.headline || '',
+      },
+    });
+    showToast(`Welcome, ${user.fullName}! Workspace ready.`);
+  };
+
+  const handleSignOut = () => {
+    try {
+      if (currentUser?.email) {
+        const hasContent = Boolean(
+          masterResume.personal?.fullName?.trim() ||
+          (masterResume.experience && masterResume.experience.length > 0) ||
+          masterResume.summary?.trim()
+        );
+        if (hasContent) {
+          const userKey = `executive_resume_user_${currentUser.email.toLowerCase().trim()}`;
+          localStorage.setItem(userKey, JSON.stringify(masterResume));
+          localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(masterResume));
+          localStorage.setItem(STORAGE_STATUS_KEY, 'true');
+        }
+      }
+      localStorage.removeItem('elite_auth_user_v1');
+      sessionStorage.removeItem('elite_auth_user_v1');
+    } catch (e) {
+      console.warn('Error during sign out storage:', e);
+    }
+    setCurrentUser(null);
+    setMasterResume(normalizeResumeData(emptyResume));
+    showToast('Signed out of candidate workspace. Your resume is safely preserved.');
   };
 
   const handleLoadSample = () => {
@@ -135,16 +286,14 @@ export default function App() {
   };
 
   const handleReset = () => {
-    if (window.confirm('Clear all fields to a blank Master Resume?')) {
-      setMasterResume(normalizeResumeData(emptyResume));
-      try {
-        localStorage.removeItem(STORAGE_STATUS_KEY);
-        localStorage.removeItem(STORAGE_DATA_KEY);
-      } catch (e) {
-        // ignore
-      }
-      showToast('Master Profile cleared to blank state.');
+    setMasterResume(normalizeResumeData(emptyResume));
+    try {
+      localStorage.removeItem(STORAGE_STATUS_KEY);
+      localStorage.removeItem(STORAGE_DATA_KEY);
+    } catch (e) {
+      // ignore
     }
+    showToast('Master Profile cleared to blank state.');
   };
 
   const handleSelectTemplate = (newTemplate: TemplateStyle) => {
@@ -386,19 +535,55 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const handleUploadSuccess = (extractedData: ResumeData) => {
-    setMasterResume((prev) => {
-      const normalized = normalizeResumeData(extractedData);
-      return {
-        ...normalized,
-        personal: {
-          ...normalized.personal,
-          photoUrl: normalized.personal.photoUrl || prev.personal?.photoUrl || '',
-        },
-      };
-    });
-    showToast('Master Resume uploaded and structured profile created!');
+  const handleUploadSuccess = async (extractedData: ResumeData) => {
+    const normalized = normalizeResumeData(extractedData);
+    const updated: ResumeData = {
+      ...normalized,
+      personal: {
+        ...normalized.personal,
+        fullName: normalized.personal?.fullName?.trim() || currentUser?.fullName || '',
+        email: normalized.personal?.email?.trim() || currentUser?.email || '',
+        photoUrl: normalized.personal?.photoUrl || masterResume.personal?.photoUrl || '',
+      },
+    };
+
+    setMasterResume(updated);
+
+    // Save immediately to persistent storage
+    try {
+      localStorage.setItem(STORAGE_STATUS_KEY, 'true');
+      localStorage.setItem(STORAGE_DATA_KEY, JSON.stringify(updated));
+      if (currentUser?.email) {
+        localStorage.setItem(`executive_resume_user_${currentUser.email.toLowerCase().trim()}`, JSON.stringify(updated));
+      }
+    } catch (e) {
+      console.error('Failed to save uploaded resume:', e);
+    }
+
+    // Save directly to Firestore Cloud Database
+    if (currentUser?.id) {
+      setCloudSyncStatus('saving');
+      const cloudRes = await saveMasterResumeToCloud(currentUser.id, updated);
+      setCloudSyncStatus(cloudRes.success ? 'synced' : 'offline');
+    }
+
+    showToast('Resume & photo uploaded! Master Profile saved to Cloud Database.');
   };
+
+  // MANDATORY LOGIN / SIGN UP GATE: Tool cannot be accessed until user signs in or creates an account
+  if (!currentUser) {
+    return (
+      <>
+        <AuthScreen onLoginSuccess={handleLoginSuccess} />
+        {toastMessage && (
+          <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 px-4 py-2.5 bg-slate-900 border border-cyan-500/50 text-cyan-200 text-xs font-semibold rounded-xl shadow-2xl animate-fade-in no-print">
+            <CheckCircle2 className="w-4 h-4 text-cyan-400" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -420,6 +605,10 @@ export default function App() {
         onOpenAtsOptimizer={() => setIsAtsModalOpen(true)}
         onTailorForJob={handleTailorForJob}
         applicationsCount={applications.length}
+        currentUser={currentUser}
+        onSignOut={handleSignOut}
+        cloudSyncStatus={cloudSyncStatus}
+        onManualCloudSave={handleManualCloudSave}
       />
 
       {/* Toast Notification */}

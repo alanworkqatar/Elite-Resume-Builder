@@ -8,7 +8,9 @@ import mammoth from 'mammoth';
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const portArgIndex = process.argv.indexOf('--port');
+const cliPort = portArgIndex !== -1 && process.argv[portArgIndex + 1] ? Number(process.argv[portArgIndex + 1]) : null;
+const PORT = cliPort || Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '30mb' }));
 app.use(express.urlencoded({ extended: true, limit: '30mb' }));
@@ -24,14 +26,17 @@ app.use((req, res, next) => {
   next();
 });
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+const geminiApiKey = process.env.GEMINI_API_KEY || '';
+const ai = geminiApiKey
+  ? new GoogleGenAI({
+      apiKey: geminiApiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    })
+  : null;
 
 // Resume extraction schema for structured Gemini output
 const resumeResponseSchema = {
@@ -695,6 +700,10 @@ async function generateContentWithFallback(
   models: string[] = ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.8-flash'],
   timeoutMs: number = 12000
 ) {
+  if (!ai) {
+    throw new Error('GEMINI_API_KEY is not configured');
+  }
+
   let lastError: any = null;
 
   for (const model of models) {
@@ -1587,9 +1596,34 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running at http://0.0.0.0:${PORT}`);
   });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`Port ${PORT} is busy, retrying in 1s...`);
+      setTimeout(() => {
+        try {
+          server.close();
+        } catch {
+          // ignore
+        }
+        server.listen(PORT, '0.0.0.0');
+      }, 1000);
+    } else {
+      console.error('Server error:', err);
+    }
+  });
+
+  const handleShutdown = () => {
+    server.close(() => {
+      process.exit(0);
+    });
+  };
+
+  process.on('SIGTERM', handleShutdown);
+  process.on('SIGINT', handleShutdown);
 }
 
 startServer();
